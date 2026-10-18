@@ -133,6 +133,64 @@ def _call_args(function_call: dict[str, Any]) -> dict[str, Any]:
     return raw_args if isinstance(raw_args, dict) else {}
 
 
+def _salvage_near_miss_args(
+    args: dict[str, Any], sig: inspect.Signature | None,
+) -> dict[str, Any]:
+    """Remap near-miss argument keys to the tool's real parameter names.
+
+    Some models (observed: kimi-k3 on ``finish``) intermittently emit
+    argument keys that are almost right: a trailing colon
+    (``"summary_in_html:"``), a suffix (``"summary_in_html_string"``),
+    or stray case/whitespace.  Passed through untouched, the call either
+    fails with ``TypeError: unexpected keyword argument`` or, worse, the
+    real parameter silently keeps its default: a ``finish`` call whose
+    ``summary_in_html`` content arrives under a near-miss key persists an
+    empty summary and the UI shows "No summary available" for completed
+    work (production incidents 2026-10-17/18, ~15 tasks in one chat).
+
+    A key that is not a parameter name counts as a near-miss when its
+    normalized form (stripped of surrounding whitespace and trailing
+    colons, lowercased) equals a parameter name or starts with one.  Its
+    value is moved to the real parameter unless that parameter already
+    holds a non-empty value from an exactly-named key.  Genuinely
+    unknown keys are left untouched, so the existing unexpected-argument
+    error and hint still fire for them.
+
+    Args:
+        args: The raw argument dict of the tool call.
+        sig: The tool's signature, ``None`` when uninspectable
+            (defensive; a registered tool is normally introspectable).
+
+    Returns:
+        A copy of *args* with near-miss keys remapped (*args* itself is
+        not mutated).
+    """
+    if sig is None:
+        return args
+    params = sig.parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return args  # **kwargs already accepts every key; nothing to salvage
+    # Longest name first so a parameter that prefixes another
+    # ("summary" vs "summary_in_html") cannot steal a longer near-miss.
+    names = sorted(params, key=lambda name: (-len(name), name))
+    salvaged = dict(args)
+    for key in list(salvaged):
+        if key in params:
+            continue
+        normalized = key.strip().rstrip(":").strip().lower()
+        target = next(
+            (name for name in names if normalized == name or normalized.startswith(name)),
+            None,
+        )
+        if target is None:
+            continue
+        value = salvaged.pop(key)
+        existing = salvaged.get(target)
+        if existing is None or (isinstance(existing, str) and not existing.strip()):
+            salvaged[target] = value
+    return salvaged
+
+
 def unknown_argument_hint(
     sig: inspect.Signature | None, args: dict[str, Any], tool: Any = None,
 ) -> str:
@@ -1159,6 +1217,16 @@ class KISSAgent(Base):
         """
         function_name = function_call["name"]
         function_args = _call_args(function_call)
+        if function_name == "finish":
+            # A malformed finish call must never lose the summary: remap
+            # near-miss keys ("summary_in_html:", "summary_in_html_string")
+            # before the dispatch would drop or reject them.
+            finish_fn = self.function_map.get(function_name)
+            try:
+                finish_sig = inspect.signature(finish_fn) if finish_fn is not None else None
+            except (TypeError, ValueError):  # pragma: no cover — exotic callable
+                finish_sig = None
+            function_args = _salvage_near_miss_args(function_args, finish_sig)
         # The call's token exists before anything can interrupt it, so
         # the ``finally`` below always has it; ``finish`` is never
         # interruptible (its result IS the task's result).
