@@ -122,6 +122,26 @@ def _set_aws(monkeypatch, **values: str) -> None:
         monkeypatch.setattr(config_module.DEFAULT_CONFIG, field, values.get(field, ""))
 
 
+def _block_ambient_aws(monkeypatch, tmp_path) -> None:
+    """Cut every ambient AWS credential source for one test.
+
+    ``bedrock_credentials_configured()`` also trusts boto3's ambient
+    chain (web-identity tokens, container credentials, profiles, the
+    shared files), so a developer machine with real AWS config would leak
+    credentials into tests that expect Bedrock to be unconfigured.
+    """
+    for var in (
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no-config"))
+
+
 # --------------------------------------------------------------------------
 # Catalog mapping
 # --------------------------------------------------------------------------
@@ -318,8 +338,9 @@ def test_picker_groups_bedrock_models_contiguously(monkeypatch, tmp_path) -> Non
     assert headers.index("Bedrock") == headers.index("Anthropic") + 1
 
 
-def test_configured_providers_tracks_bedrock_credentials(monkeypatch) -> None:
+def test_configured_providers_tracks_bedrock_credentials(monkeypatch, tmp_path) -> None:
     """Bedrock is configured with a bearer token or a key pair, not a lone key id."""
+    _block_ambient_aws(monkeypatch, tmp_path)
     _set_aws(monkeypatch)
     assert model_info.bedrock_credentials_configured() is False
     assert model_info._configured_providers()["Bedrock"] is False
@@ -328,6 +349,52 @@ def test_configured_providers_tracks_bedrock_credentials(monkeypatch) -> None:
     _set_aws(monkeypatch, AWS_ACCESS_KEY_ID="AKIA")
     assert model_info.bedrock_credentials_configured() is False
     _set_aws(monkeypatch, AWS_ACCESS_KEY_ID="AKIA", AWS_SECRET_ACCESS_KEY="secret")
+    assert model_info.bedrock_credentials_configured() is True
+
+
+def test_ambient_irsa_token_configures_bedrock(monkeypatch, tmp_path) -> None:
+    """An EKS/IRSA web-identity token file counts as Bedrock credentials."""
+    _block_ambient_aws(monkeypatch, tmp_path)
+    _set_aws(monkeypatch)
+    token = tmp_path / "token"
+    monkeypatch.setenv("AWS_WEB_IDENTITY_TOKEN_FILE", str(token))
+    assert model_info.bedrock_credentials_configured() is False  # token file missing
+    token.write_text("jwt", encoding="utf-8")
+    assert model_info.bedrock_credentials_configured() is True
+
+
+def test_ambient_container_and_profile_configure_bedrock(monkeypatch, tmp_path) -> None:
+    """ECS container credentials and an explicit AWS profile count too."""
+    _block_ambient_aws(monkeypatch, tmp_path)
+    _set_aws(monkeypatch)
+    assert model_info.bedrock_credentials_configured() is False
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/id")
+    assert model_info.bedrock_credentials_configured() is True
+    monkeypatch.delenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+    monkeypatch.setenv("AWS_PROFILE", "prod-admin")
+    assert model_info.bedrock_credentials_configured() is True
+
+
+def test_ambient_shared_files_configure_bedrock(monkeypatch, tmp_path) -> None:
+    """Shared files count when they source credentials; a region-only config does not."""
+    _block_ambient_aws(monkeypatch, tmp_path)
+    _set_aws(monkeypatch)
+    config = tmp_path / "config"
+    credentials = tmp_path / "credentials"
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    config.write_text("[default]\nregion = us-west-2\n", encoding="utf-8")
+    assert model_info.bedrock_credentials_configured() is False
+    config.write_text(
+        "[default]\nregion = us-west-2\nsso_start_url = https://x.awsapps.com/start\n",
+        encoding="utf-8",
+    )
+    assert model_info.bedrock_credentials_configured() is True
+    config.unlink()
+    credentials.write_text(
+        "[default]\naws_access_key_id = AKIA\naws_secret_access_key = s\n",
+        encoding="utf-8",
+    )
     assert model_info.bedrock_credentials_configured() is True
 
 
@@ -378,6 +445,7 @@ def test_custom_model_entry_puts_bedrock_id_in_the_picker(monkeypatch, tmp_path)
     # The next daemon start merges the file into the catalog.
     monkeypatch.setattr(model_info, "MODEL_INFO", model_info._load_model_info())
     assert _OPUS in model_info.MODEL_INFO
+    _block_ambient_aws(monkeypatch, tmp_path)
     _set_aws(monkeypatch)
     assert _OPUS not in model_info.get_available_models()
     _set_aws(monkeypatch, AWS_BEARER_TOKEN_BEDROCK="bearer")
@@ -463,6 +531,7 @@ def test_key_store_round_trip(tmp_path, monkeypatch) -> None:
         monkeypatch.delenv(field, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("KISS_HOME", str(tmp_path / ".kiss"))
+    _block_ambient_aws(monkeypatch, tmp_path)
 
     for field in _AWS_FIELDS:
         save_api_key(field, "value-" + field)
@@ -1082,6 +1151,7 @@ def test_bedrock_only_configuration_has_default_and_fast_models(monkeypatch, tmp
     (tmp_path / "bin").mkdir()
     monkeypatch.setenv("PATH", str(tmp_path / "bin"))  # no claude / codex CLI
     monkeypatch.setenv("HOME", str(tmp_path))
+    _block_ambient_aws(monkeypatch, tmp_path)
     monkeypatch.setattr(model_info, "USER_MY_MODELS_PATH", tmp_path / "MY_MODELS.json")
     haiku = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
     assert model_info.save_custom_model(_OPUS) is None

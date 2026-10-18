@@ -937,20 +937,93 @@ the only place either is consulted.
 
 
 def bedrock_credentials_configured() -> bool:
-    """Whether Amazon Bedrock credentials are set in the config.
+    """Whether Amazon Bedrock credentials are available.
 
     Either a bearer token (``AWS_BEARER_TOKEN_BEDROCK``) or an access key
     pair (``AWS_ACCESS_KEY_ID`` + ``AWS_SECRET_ACCESS_KEY``) configures
-    Bedrock.  Ambient AWS credentials (``~/.aws``, an instance role) also
-    work at request time but are not detected here.
+    Bedrock directly.  Ambient AWS credentials from boto3's default chain
+    (a web-identity token as on EKS/IRSA, ECS container credentials, an
+    explicit profile, the shared ``~/.aws`` files) work at request time
+    too and are detected by :func:`_ambient_aws_credentials_configured`.
+    An EC2 instance role is the one source not detected (its probe needs
+    a network round-trip per call).
 
     Returns:
-        True when one of the two credential forms is configured.
+        True when one of the credential forms is available.
     """
     keys = config_module.DEFAULT_CONFIG
-    return bool(keys.AWS_BEARER_TOKEN_BEDROCK) or bool(
-        keys.AWS_ACCESS_KEY_ID and keys.AWS_SECRET_ACCESS_KEY
+    return (
+        bool(keys.AWS_BEARER_TOKEN_BEDROCK)
+        or bool(keys.AWS_ACCESS_KEY_ID and keys.AWS_SECRET_ACCESS_KEY)
+        or _ambient_aws_credentials_configured()
     )
+
+
+_AWS_SHARED_FILE_CREDENTIAL_DIRECTIVES = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "credential_process",
+    "credential_source",
+    "role_arn",
+    "sso_start_url",
+    "sso_session",
+)
+"""Directives that let a shared AWS file source credentials on its own.
+
+A keyword scan rather than an ini parse: a false positive only shows
+Bedrock models that then fail with a clear NoCredentialsError, a false
+negative hides models that would work.  Plain ``region`` entries are
+deliberately absent: a region-only config cannot authenticate.
+"""
+
+
+def _aws_shared_file_offers_credentials(path: Path) -> bool:
+    """Whether the shared AWS file at *path* can source credentials.
+
+    Args:
+        path: The credentials or config file to scan.
+
+    Returns:
+        True when the file holds a credential-sourcing directive.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(
+        directive in text for directive in _AWS_SHARED_FILE_CREDENTIAL_DIRECTIVES
+    )
+
+
+def _ambient_aws_credentials_configured() -> bool:
+    """Whether boto3's default credential chain has a local source.
+
+    Mirrors the chain's probes that need no network: a web-identity token
+    file (IRSA on EKS), ECS container credentials, an explicit profile,
+    and the shared credentials/config files (honoring the
+    ``AWS_SHARED_CREDENTIALS_FILE``/``AWS_CONFIG_FILE`` overrides).  The
+    EC2 instance-metadata probe is skipped on purpose: it costs a network
+    round-trip per picker render.
+
+    Returns:
+        True when a non-network credential source is present.
+    """
+    token_file = os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+    if token_file and Path(token_file).is_file():
+        return True
+    if os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or os.environ.get(
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+    ):
+        return True
+    if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_DEFAULT_PROFILE"):
+        return True
+    credentials = Path(
+        os.environ.get("AWS_SHARED_CREDENTIALS_FILE", "~/.aws/credentials")
+    ).expanduser()
+    if _aws_shared_file_offers_credentials(credentials):
+        return True
+    config = Path(os.environ.get("AWS_CONFIG_FILE", "~/.aws/config")).expanduser()
+    return _aws_shared_file_offers_credentials(config)
 
 
 def _match_openai_compatible_provider(
