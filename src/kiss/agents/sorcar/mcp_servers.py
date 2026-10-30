@@ -171,9 +171,11 @@ _JSON_TO_PY: dict[str, type] = {
     "integer": int,
     "number": float,
     "boolean": bool,
-    "array": list,
-    "object": dict,
+    "null": type(None),
 }
+
+# JSON container type name -> the Python type ``json.loads`` yields for it.
+_JSON_CONTAINERS: dict[str, type] = {"object": dict, "array": list}
 
 
 @dataclass(frozen=True)
@@ -1322,13 +1324,114 @@ def _pick[T](registry: dict[str, T], server: str) -> T | None:
     return named[0] if len(named) == 1 else None
 
 
-def _json_schema_to_annotation(prop: Any) -> type:
-    """Map one inputSchema property to the Python annotation for kiss."""
-    if isinstance(prop, dict):
-        ann = _JSON_TO_PY.get(str(prop.get("type", "")))
-        if ann is not None:
-            return ann
-    return str
+def _schema_type_names(prop: Any) -> set[str]:
+    """Return every JSON type name one inputSchema property accepts.
+
+    Looks through a ``type`` list and ``anyOf``/``oneOf``/``allOf``
+    branches, so ``{"anyOf": [{"type": "string"}, {"type": "array"}]}``
+    yields ``{"string", "array"}``.
+
+    Args:
+        prop: The property schema (anything not a dict yields no names).
+
+    Returns:
+        The set of type names (possibly empty for an untyped property).
+    """
+    names: set[str] = set()
+    if not isinstance(prop, dict):
+        return names
+    declared = prop.get("type")
+    if isinstance(declared, str):
+        names.add(declared)
+    elif isinstance(declared, list):
+        names.update(str(t) for t in declared)
+    for key in ("anyOf", "oneOf", "allOf"):
+        branches = prop.get(key)
+        if isinstance(branches, list):
+            for branch in branches:
+                names |= _schema_type_names(branch)
+    return names
+
+
+def _json_schema_to_annotation(prop: Any) -> Any:
+    """Map one inputSchema property to the Python annotation for kiss.
+
+    Object and array properties become ``dict[str, Any]`` and
+    ``list[<items>]``: kiss's schema builder (``_python_type_to_json_schema``)
+    only recognises parameterised containers and renders the bare ``dict``
+    and ``list`` types as ``string``, which told the model to send JSON
+    text where the server expects a JSON value.  ``anyOf``/``oneOf``
+    properties and ``type`` lists become the union of their branches
+    (``{"type": ["object", "null"]}`` is ``dict[str, Any] | None``, which
+    kiss renders as a plain ``object``).  Anything else (an untyped or
+    unknown property) is a string.
+
+    Args:
+        prop: The property schema.
+
+    Returns:
+        The annotation to put on the wrapper's parameter.
+    """
+    if not isinstance(prop, dict):
+        return str
+    declared = prop.get("type")
+    branches = prop.get("anyOf") or prop.get("oneOf")
+    if isinstance(declared, list):
+        branches = [{**prop, "type": name} for name in declared]
+    if isinstance(branches, list) and branches:
+        anns: list[Any] = []
+        for branch in branches:
+            ann = _json_schema_to_annotation(branch)
+            if ann not in anns:
+                anns.append(ann)
+        return functools.reduce(lambda a, b: a | b, anns)
+    if declared == "object":
+        return dict[str, Any]
+    if declared == "array":
+        return list[_json_schema_to_annotation(prop.get("items"))]  # type: ignore[misc]
+    return _JSON_TO_PY.get(str(declared or ""), str)
+
+
+def _container_kinds(prop: Any) -> tuple[type, ...]:
+    """Return the container types (``dict``, ``list``) *prop* accepts.
+
+    Args:
+        prop: The property schema.
+
+    Returns:
+        The ``json.loads`` result types a JSON-text argument may be
+        parsed into for this property; empty when it accepts neither
+        an object nor an array.
+    """
+    names = _schema_type_names(prop)
+    return tuple(kind for name, kind in _JSON_CONTAINERS.items() if name in names)
+
+
+def _coerce_json_string(value: Any, kinds: tuple[type, ...]) -> Any:
+    """Parse *value* when it is JSON text for an object or array property.
+
+    Models routinely send ``'{"id": "131"}'`` for an ``object`` parameter
+    (every Bedrock/Anthropic transition call did), and a server validating
+    its schema rejects the string.  A string that parses to one of *kinds*
+    is replaced by the parsed value; anything else (a property that takes
+    no container, invalid JSON, or JSON of another type) is forwarded
+    unchanged so the server reports the mismatch itself.
+
+    Args:
+        value: The argument as the model supplied it.
+        kinds: The container types the property accepts
+            (:func:`_container_kinds`).
+
+    Returns:
+        The parsed container, or *value* unchanged.
+    """
+    if not kinds or not isinstance(value, str):
+        return value
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return value
+    return parsed if isinstance(parsed, kinds) else value
 
 
 def _one_line(text: str) -> str:
@@ -1376,7 +1479,11 @@ def make_mcp_tool_wrapper(
     The wrapper's ``__signature__`` and docstring are synthesized from
     the MCP ``inputSchema`` so kiss's docstring/signature-based schema
     builder reproduces the tool's parameters faithfully; calling it
-    forwards to :meth:`MCPManager.call_tool`.
+    forwards to :meth:`MCPManager.call_tool`.  A JSON-text argument for
+    an object or array property is parsed first
+    (:func:`_coerce_json_string`), so a model that sends
+    ``'{"id": "131"}'`` where the schema says ``object`` still reaches
+    the server with an object.
 
     Args:
         manager: The live connection manager.
@@ -1398,14 +1505,16 @@ def make_mcp_tool_wrapper(
     required = set(required_raw) if isinstance(required_raw, list) else set()
 
     entries: list[tuple[bool, inspect.Parameter, str]] = []
-    param_map: dict[str, tuple[str, bool]] = {}
+    # py_name -> (JSON property name, required, container kinds to parse
+    # JSON text into)
+    param_map: dict[str, tuple[str, bool, tuple[type, ...]]] = {}
     used_names: set[str] = set()
     for prop_name in props:
         prop = props[prop_name]
         ann = _json_schema_to_annotation(prop)
         is_required = prop_name in required
         py_name = _python_param_name(str(prop_name), used_names)
-        param_map[py_name] = (str(prop_name), is_required)
+        param_map[py_name] = (str(prop_name), is_required, _container_kinds(prop))
         param = inspect.Parameter(
             py_name,
             kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -1425,10 +1534,10 @@ def make_mcp_tool_wrapper(
     def wrapper(**kwargs: Any) -> str:
         arguments: dict[str, Any] = {}
         for py_name, value in kwargs.items():
-            original, is_required = param_map.get(py_name, (py_name, True))
+            original, is_required, kinds = param_map.get(py_name, (py_name, True, ()))
             if value is None and not is_required:
                 continue
-            arguments[original] = value
+            arguments[original] = _coerce_json_string(value, kinds)
         return manager.call_tool(connection_key, tool_name, arguments)
 
     description = _one_line(tool.description or f"MCP tool {tool_name} on server {server}.")
