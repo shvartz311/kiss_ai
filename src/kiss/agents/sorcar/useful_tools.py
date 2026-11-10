@@ -1637,7 +1637,17 @@ def _output_budget(max_output_chars: int) -> int:
     return max(1, min(int(max_output_chars), DEFAULT_CONFIG.tool_output_max_chars))
 
 
-def _clean_env(work_dir: str | None = None) -> dict[str, str]:
+TASK_ID_ENV = "KISS_TASK_ID"
+"""Environment variable that gives a ``Bash`` child the id of the task that ran it.
+
+The id of the task's ``task_history`` row, whose ``task_settings`` event
+records who started the task (``identity``, see ``KISS_IDENTITY_HEADER``
+in :mod:`kiss.server.web_server`).  A tool such as a shared workspace's
+``gh`` wrapper looks that record up instead of taking the agent's word.
+"""
+
+
+def _clean_env(work_dir: str | None = None, task_id: str = "") -> dict[str, str]:
     """Return a fresh copy of ``os.environ`` without ``VIRTUAL_ENV``.
 
     When the agent process runs inside a virtual-env (e.g. the
@@ -1658,11 +1668,17 @@ def _clean_env(work_dir: str | None = None) -> dict[str, str]:
             via ``KISS_WORKDIR``.  ``None`` or ``""`` (the unresolved
             default on a freshly constructed agent) leaves the inherited
             value untouched.
+        task_id: The running task's id, exported as :data:`TASK_ID_ENV`;
+            ``""`` exports none (an inherited value is dropped, since it
+            names some other task).
     """
     env = os.environ.copy()
     env.pop("VIRTUAL_ENV", None)
+    env.pop(TASK_ID_ENV, None)
     if work_dir:
         env["KISS_WORKDIR"] = work_dir
+    if task_id:
+        env[TASK_ID_ENV] = task_id
     return env
 
 
@@ -1814,6 +1830,7 @@ def _run_one_command(
     work_dir: str | None,
     timeout_seconds: float,
     max_output_chars: int,
+    task_id: Callable[[], str] | None = None,
 ) -> tuple[int | None, str, float]:
     """Run one host ``run_commands_parallel`` command on a worker thread.
 
@@ -1825,6 +1842,8 @@ def _run_one_command(
         max_output_chars: The report's per-command budget; an output too
             big to be kept whole (see :class:`_Capture`) is cut to it
             here, where the count of what was left out is known.
+        task_id: The caller's :attr:`UsefulTools.task_id`, so the shell
+            gets the task's ``KISS_TASK_ID`` like its other shells.
 
     Returns:
         ``(returncode, output, seconds)``: the exit code (``None`` on
@@ -1836,6 +1855,7 @@ def _run_one_command(
     # a callback from this worker thread would detach the output from
     # the task.
     runner = UsefulTools(stop_event=cancel, work_dir=work_dir)
+    runner.task_id = task_id
     cwd = runner._resolve_cwd()
     try:
         guard, note, command, timeout_seconds = _refuse_or_lift(
@@ -2316,7 +2336,9 @@ def _spawn_owned(
     return tool_interrupt.result_interruptible(handoff)
 
 
-def _spawn_job(popen_kwargs: dict[str, Any], log_path: Path, cwd: str | None) -> subprocess.Popen:
+def _spawn_job(
+    popen_kwargs: dict[str, Any], log_path: Path, cwd: str | None, env: dict[str, str],
+) -> subprocess.Popen:
     """Start a background job's shell: stdout and stderr on *log_path*, stdin ``/dev/null``."""
     with open(log_path, "wb") as log_file:
         return popen_process_group(
@@ -2324,7 +2346,7 @@ def _spawn_job(popen_kwargs: dict[str, Any], log_path: Path, cwd: str | None) ->
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            env=_clean_env(cwd),
+            env=env,
             cwd=cwd,
         )
 
@@ -2610,6 +2632,10 @@ class UsefulTools:
         # what they wait for can then only be something a child was to
         # leave behind, and its result says what it did instead.
         self.idle_children: Callable[[], str] | None = None
+        # Returns the id of the task running these tools, exported to
+        # every shell as ``KISS_TASK_ID``; set by the agent that
+        # registers them.  Without one no id is exported.
+        self.task_id: Callable[[], str] | None = None
         self._read_calls = 0
         # Outputs spilled to tmp/tool-out/ by this instance (see _spill);
         # the tag keeps instances sharing a work dir (a parent and its
@@ -2722,9 +2748,17 @@ class UsefulTools:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_clean_env(cwd),
+            env=self._child_env(cwd),
             cwd=cwd,
         )
+
+    def _child_env(self, cwd: str | None) -> dict[str, str]:
+        """Return the environment of a shell this instance starts in *cwd*.
+
+        :func:`_clean_env`, with the running task's id (:attr:`task_id`)
+        exported as :data:`TASK_ID_ENV`.
+        """
+        return _clean_env(cwd, self.task_id() if self.task_id is not None else "")
 
     def _resolve_cwd(self) -> str | None:
         """Return the directory a Bash command runs in.
@@ -2818,7 +2852,9 @@ class UsefulTools:
             try:
                 _make_dirs_under(root, JOB_LOG_DIR)
                 process = _spawn_owned(
-                    functools.partial(_spawn_job, popen_kwargs, log_path, cwd),
+                    functools.partial(
+                        _spawn_job, popen_kwargs, log_path, cwd, self._child_env(cwd),
+                    ),
                     functools.partial(
                         _watch_job, self.stop_event, settled=settled, registered=registered,
                     ),
@@ -4046,7 +4082,9 @@ class UsefulTools:
         Returns:
             What :func:`_run_one_command` returns.
         """
-        result = _run_one_command(command, cancel, work_dir, timeout_seconds, max_output_chars)
+        result = _run_one_command(
+            command, cancel, work_dir, timeout_seconds, max_output_chars, self.task_id,
+        )
         self._note_shell_view(command, result[0], result[1])
         return result
 
