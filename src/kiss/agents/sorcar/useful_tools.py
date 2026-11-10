@@ -1836,7 +1836,19 @@ def _output_budget(max_output_chars: int) -> int:
     return max(1, min(int(max_output_chars), DEFAULT_CONFIG.tool_output_max_chars))
 
 
-def _clean_env(work_dir: str | None = None, private_dir: str | None = None) -> dict[str, str]:
+TASK_ID_ENV = "KISS_TASK_ID"
+"""Environment variable that gives a ``Bash`` child the id of the task that ran it.
+
+The id of the task's ``task_history`` row, whose ``task_settings`` event
+records who started the task (``identity``, see ``KISS_IDENTITY_HEADER``
+in :mod:`kiss.server.web_server`).  A tool such as a shared workspace's
+``gh`` wrapper looks that record up instead of taking the agent's word.
+"""
+
+
+def _clean_env(
+    work_dir: str | None = None, private_dir: str | None = None, task_id: str = "",
+) -> dict[str, str]:
     """Return a fresh copy of ``os.environ`` without ``VIRTUAL_ENV``.
 
     When the agent process runs inside a virtual-env (e.g. the
@@ -1866,11 +1878,15 @@ def _clean_env(work_dir: str | None = None, private_dir: str | None = None) -> d
             Git Bash shell of the user, and once the sub-agent had ended
             and the folder was gone each of them started with "could
             not find /tmp" and had no temp directory.
+        task_id: The running task's id, exported as :data:`TASK_ID_ENV`;
+            ``""`` exports none (an inherited value is dropped, since it
+            names some other task).
     """
     env = os.environ.copy()
     # The API keys of the run's project replace the daemon's.
     env.update(run_overlay_env())
     env.pop("VIRTUAL_ENV", None)
+    env.pop(TASK_ID_ENV, None)
     if work_dir:
         env["KISS_WORKDIR"] = work_dir
     if private_dir:
@@ -1878,6 +1894,8 @@ def _clean_env(work_dir: str | None = None, private_dir: str | None = None) -> d
         if sys.platform != "win32":  # pragma: no branch
             names += ["TMP", "TEMP"]
         env.update(dict.fromkeys(names, private_dir))
+    if task_id:
+        env[TASK_ID_ENV] = task_id
     return env
 
 
@@ -2132,6 +2150,7 @@ def _run_one_command(
     timeout_seconds: float,
     max_output_chars: int,
     private_dir: str | None = None,
+    task_id: Callable[[], str] | None = None,
 ) -> tuple[int | None, str, float]:
     """Run one host ``run_commands_parallel`` command on a worker thread.
 
@@ -2145,6 +2164,8 @@ def _run_one_command(
             here, where the count of what was left out is known.
         private_dir: The private folder of the sub-agent running the
             command, if one is (:func:`_clean_env`).
+        task_id: The caller's :attr:`UsefulTools.task_id`, so the shell
+            gets the task's ``KISS_TASK_ID`` like its other shells.
 
     Returns:
         ``(returncode, output, seconds)``: the exit code (``None`` on
@@ -2156,6 +2177,7 @@ def _run_one_command(
     # a callback from this worker thread would detach the output from
     # the task.
     runner = UsefulTools(stop_event=cancel, work_dir=work_dir, private_dir=private_dir)
+    runner.task_id = task_id
     cwd = runner._resolve_cwd()
     try:
         guard, note, command, timeout_seconds = _refuse_or_lift(
@@ -2712,13 +2734,13 @@ def _spawn_owned(
 
 
 def _spawn_job(
-    popen_kwargs: dict[str, Any], log_path: Path, cwd: str | None, private_dir: str | None = None,
+    popen_kwargs: dict[str, Any], log_path: Path, cwd: str | None, env: dict[str, str],
     followed: list[IO[bytes]] | None = None,
 ) -> subprocess.Popen:
     """Start a background job's shell: stdout and stderr on *log_path*, stdin ``/dev/null``.
 
-    A launch that fails leaves no log behind.  *private_dir* is the
-    sub-agent's private folder, if the job is one's (:func:`_clean_env`).
+    A launch that fails leaves no log behind.  *env* is the shell's
+    environment (:meth:`UsefulTools._child_env`).
     *followed* is the list of a caller that reads the job's output as it
     grows (:meth:`UsefulTools._run_then_detach`): it receives the log,
     open for reading before the shell runs.  Opened by its name once the
@@ -2736,7 +2758,7 @@ def _spawn_job(
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
-                env=_clean_env(cwd, private_dir),
+                env=env,
                 cwd=cwd,
             )
     except BaseException:
@@ -3300,6 +3322,10 @@ class UsefulTools:
         # what they wait for can then only be something a child was to
         # leave behind, and its result says what it did instead.
         self.idle_children: Callable[[], str] | None = None
+        # Returns the id of the task running these tools, exported to
+        # every shell as ``KISS_TASK_ID``; set by the agent that
+        # registers them.  Without one no id is exported.
+        self.task_id: Callable[[], str] | None = None
         self._read_calls = 0
         # Outputs spilled to tool-out/ by this instance (see _spill); the
         # tag keeps instances sharing a scratch dir (runs with no task id
@@ -3422,8 +3448,18 @@ class UsefulTools:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_clean_env(cwd, self.private_dir),
+            env=self._child_env(cwd),
             cwd=cwd,
+        )
+
+    def _child_env(self, cwd: str | None) -> dict[str, str]:
+        """Return the environment of a shell this instance starts in *cwd*.
+
+        :func:`_clean_env`, with the running task's id (:attr:`task_id`)
+        exported as :data:`TASK_ID_ENV`.
+        """
+        return _clean_env(
+            cwd, self.private_dir, self.task_id() if self.task_id is not None else "",
         )
 
     def _resolve_cwd(self) -> str | None:
@@ -3523,7 +3559,7 @@ class UsefulTools:
                 log_path = _tools_dir(self.scratch_dir, JOB_LOG_DIR) / f"{job_id}.log"
                 process, ended = _spawn_owned(
                     functools.partial(
-                        _spawn_job, popen_kwargs, log_path, cwd, self.private_dir, followed,
+                        _spawn_job, popen_kwargs, log_path, cwd, self._child_env(cwd), followed,
                     ),
                     functools.partial(
                         _watch_job, self.stop_event, settled=settled, registered=registered,
@@ -4781,7 +4817,9 @@ class UsefulTools:
             What :func:`_run_one_command` returns.
         """
         result = _run_one_command(
-            command, cancel, work_dir, timeout_seconds, max_output_chars, self.private_dir)
+            command, cancel, work_dir, timeout_seconds, max_output_chars, self.private_dir,
+            self.task_id,
+        )
         self._note_shell_view(command, result[0], result[1])
         return result
 
