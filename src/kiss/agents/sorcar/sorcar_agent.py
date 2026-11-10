@@ -1816,6 +1816,7 @@ class SorcarAgent(RelentlessAgent):
             # sub-agent job of this agent has finished with its result
             # unread: what it waits for can only be a child's leftovers.
             useful_tools.idle_children = functools.partial(unread_results_note, self)
+            useful_tools.task_id = functools.partial(_persisted_task_id, self)
             self._useful_tools = useful_tools
             tools = [
                 useful_tools.Bash, useful_tools.bash_job,
