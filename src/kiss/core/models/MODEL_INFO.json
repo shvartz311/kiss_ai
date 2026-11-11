@@ -290,6 +290,71 @@
     "comment": "NEW",
     "alias_of": "bedrock/global.anthropic.claude-fable-5-1"
   },
+  "bedrock/global.anthropic.claude-fable-5-2": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "high",
+    "comment": "NEW"
+  },
+  "bedrock/global.anthropic.claude-fable-5-2-high": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "high",
+    "comment": "NEW",
+    "alias_of": "bedrock/global.anthropic.claude-fable-5-2"
+  },
+  "bedrock/global.anthropic.claude-fable-5-2-low": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "low",
+    "comment": "NEW",
+    "alias_of": "bedrock/global.anthropic.claude-fable-5-2"
+  },
+  "bedrock/global.anthropic.claude-fable-5-2-max": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "max",
+    "comment": "NEW",
+    "alias_of": "bedrock/global.anthropic.claude-fable-5-2"
+  },
+  "bedrock/global.anthropic.claude-fable-5-2-medium": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "medium",
+    "comment": "NEW",
+    "alias_of": "bedrock/global.anthropic.claude-fable-5-2"
+  },
+  "bedrock/global.anthropic.claude-fable-5-2-xhigh": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.0,
+    "output_price_per_1M": 40.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "xhigh",
+    "comment": "NEW",
+    "alias_of": "bedrock/global.anthropic.claude-fable-5-2"
+  },
   "bedrock/global.anthropic.claude-fable-5-high": {
     "context_length": 400000,
     "input_price_per_1M": 10.0,
@@ -1070,6 +1135,71 @@
     "thinking": "xhigh",
     "comment": "NEW",
     "alias_of": "bedrock/us.anthropic.claude-fable-5-1"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "high",
+    "comment": "NEW"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2-high": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "high",
+    "comment": "NEW",
+    "alias_of": "bedrock/us.anthropic.claude-fable-5-2"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2-low": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "low",
+    "comment": "NEW",
+    "alias_of": "bedrock/us.anthropic.claude-fable-5-2"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2-max": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "max",
+    "comment": "NEW",
+    "alias_of": "bedrock/us.anthropic.claude-fable-5-2"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2-medium": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "medium",
+    "comment": "NEW",
+    "alias_of": "bedrock/us.anthropic.claude-fable-5-2"
+  },
+  "bedrock/us.anthropic.claude-fable-5-2-xhigh": {
+    "context_length": 500000,
+    "input_price_per_1M": 8.8,
+    "output_price_per_1M": 44.0,
+    "fc": true,
+    "emb": false,
+    "gen": true,
+    "thinking": "xhigh",
+    "comment": "NEW",
+    "alias_of": "bedrock/us.anthropic.claude-fable-5-2"
   },
   "bedrock/us.anthropic.claude-fable-5-high": {
     "context_length": 400000,
