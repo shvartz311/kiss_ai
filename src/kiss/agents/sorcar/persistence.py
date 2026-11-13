@@ -2680,6 +2680,29 @@ def _chat_first_tasks(chat_ids: list[str]) -> dict[str, str]:
     return {str(r["chat_id"]): str(r["task"] or "") for r in rows}
 
 
+def _listed_tasks(task_ids: set[str]) -> list[tuple[str, bool, bool]]:
+    """Return ``(chat_id, is_cron, cron_only)`` of the listable tasks among *task_ids*. Thread-safe.
+
+    ``is_cron`` marks a task the cron scheduler launched and
+    ``cron_only`` a chat whose listable tasks are all such tasks.
+    Sub-agent rows are not listable and are left out.
+    """
+    ids = sorted(task_ids)
+    if not ids:
+        return []
+    db = _get_db()
+    with _rw_lock.read_lock():
+        # NOT_SUBAGENT is unqualified: it binds to p inside the subquery.
+        rows = db.execute(
+            "SELECT chat_id, is_cron, NOT EXISTS ("
+            "SELECT 1 FROM task_history p WHERE p.chat_id = t.chat_id "
+            f"AND {NOT_SUBAGENT} AND COALESCE(p.is_cron, 0) = 0) AS cron_only "
+            f"FROM task_history t WHERE id IN ({','.join('?' * len(ids))}) AND {NOT_SUBAGENT}",
+            ids,
+        ).fetchall()
+    return [(str(r["chat_id"] or ""), bool(r["is_cron"]), bool(r["cron_only"])) for r in rows]
+
+
 def _history_date_range() -> tuple[float | None, float | None]:
     """Return the first and last task completion times in the history.
 

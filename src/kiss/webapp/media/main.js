@@ -1141,6 +1141,10 @@
   // The view the rows on screen were built for: a view switch is a
   // rebuild even when the data did not change.
   let historyRenderedLegacy = false;
+  // The running tasks the daemon last listed (`runningChats`), one
+  // {chatId, isCron, cronOnly} each: the rows the list puts under
+  // Running.
+  let runningChats = [];
   // A destructive history rebuild is deferred while a press (mouse
   // button or touch contact) is held inside the list: replacing ANY row
   // between press and release would swallow the resulting click (its
@@ -2546,6 +2550,37 @@
   }
 
   /**
+   * Whether the CHATS list shows a chat's panel: one of its loaded
+   * tasks passes the filters.
+   *
+   * @param {string} chatId The chat's id.
+   * @returns {boolean}
+   */
+  function historyChatShown(chatId) {
+    const group = historyChatGroups.get(chatId);
+    return !!group && group.style.display !== 'none';
+  }
+
+  /**
+   * How many items the CHATS list shows under Running, counted from
+   * the daemon's `runningChats`: the tasks in the flat view, else the
+   * chats.  The Cron chip hides the cron scheduler's tasks, and such a
+   * task still puts its chat under Running when the list shows the
+   * chat for its other tasks.
+   *
+   * @returns {number}
+   */
+  function runningChatCount() {
+    const showCron = document.getElementById('hf-cron').checked;
+    if (historyLegacyView)
+      return runningChats.filter(c => showCron || !c.isCron).length;
+    const shown = runningChats.filter(
+      c => showCron || !c.isCron || historyChatShown(c.chatId),
+    );
+    return new Set(shown.map(c => c.chatId)).size;
+  }
+
+  /**
    * The phone layout's screen bar (#mobile-screens): the number of
    * running chats, the title of the chat its screen shows, the Files
    * button while a content tab is open, and the screen on view.  An
@@ -2553,7 +2588,7 @@
    * ever marked current.
    */
   function renderMobileScreenBar() {
-    const running = tabs.filter(isLaunchRunning).length;
+    const running = runningChatCount();
     document.getElementById('mobile-running').hidden = running === 0;
     document.getElementById('mobile-running-count').textContent =
       String(running);
@@ -20570,19 +20605,22 @@
   // lands (see the `history` handler), so a late change is still
   // picked up and every reply sent is shown.
   function refreshHistory() {
-    if (sidebar.classList.contains('open')) {
-      if (historyPageOneInFlight()) {
-        historyRefreshWanted = true;
-      } else {
-        requestHistoryFromStart();
-      }
-    }
+    if (sidebar.classList.contains('open')) refetchHistoryPageOne();
+    // The phone's Chats button counts the running chats with the list
+    // closed too (renderMobileScreenBar).
+    if (isMobileRemote) api.getRunningChats();
     // Task news (a run started or finished, a commit landed) may have
     // changed the workspace: re-list the Explorer folders on screen /
     // re-read git for the Source Control view.  A hidden view — or one
     // behind a closed phone drawer — is only marked dirty and reloads
     // when it next shows.
     refreshSidebarDataViews(true);
+  }
+
+  /** Ask for page one, or fold the ask into the page one in flight. */
+  function refetchHistoryPageOne() {
+    if (historyPageOneInFlight()) historyRefreshWanted = true;
+    else requestHistoryFromStart();
   }
 
   /** Page one landed: send the refresh folded into it, if any. */
@@ -22402,6 +22440,20 @@
         refreshHistory();
         requestInputHistory();
         break;
+      case 'runningChats':
+        runningChats = ev.chats;
+        // A cron task running in a chat with other tasks counts when
+        // the list shows that chat (runningChatCount): a closed list
+        // that lacks the chat is brought up to date.
+        if (
+          !sidebar.classList.contains('open') &&
+          runningChats.some(
+            c => c.isCron && !c.cronOnly && !historyChatShown(c.chatId),
+          )
+        )
+          refetchHistoryPageOne();
+        renderMobileScreenBar();
+        break;
 
       case 'openExternalResult':
         // The daemon could not start a browser (headless): a new
@@ -23214,7 +23266,6 @@
     tab.isRunning = running;
     if (!running) tab.isStopping = false;
     if (tab.id === activeTabId) renderStopButton();
-    renderMobileScreenBar();
   }
 
   function setRunningState(running) {
@@ -29757,6 +29808,8 @@
     // painted: a filter changes no row's task, and the paths that do
     // (a rebuild, a new active task) paint it themselves.
     if (historyActiveScrollPending) applyHistoryActiveTask();
+    // The Chats button counts what the list shows under Running.
+    renderMobileScreenBar();
   }
 
   /**

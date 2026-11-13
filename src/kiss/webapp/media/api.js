@@ -21,6 +21,7 @@
     'resumeSession',
     'ready',
     'getHistory',
+    'getRunningChats',
     'getAdjacentTask',
     'setFavorite',
     'setChatSummary',
