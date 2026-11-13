@@ -519,6 +519,9 @@ body {
 /* A stacked surface showing a content tab in place of the chat. */
 body.content-tab-open #chat-header { display: none; }
 
+/* The phone's screen bar: only remote-codex.css shows it. */
+#mobile-screens { display: none; }
+
 /* The tab rows (renderTabBar).  There is no row of chat tabs: the
    chat on screen is the one picked in the Chats panel.  #tab-bar, the
    group strip, lists the chat on screen with its sub-agents (and, on a

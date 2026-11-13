@@ -2530,6 +2530,51 @@
     if (members.length > 1) restoreStripFocus(tabList, focused);
 
     renderContentTabBar(split);
+    renderMobileScreenBar();
+  }
+
+  /**
+   * The chat the phone's chat screen shows: the tab on screen, or,
+   * while a file, browser or terminal tab is there, the chat that tab
+   * belongs to, else (a browser page belongs to none) the chat it took
+   * the screen from.
+   *
+   * @returns {object|null} A chat tab, or null when there is none.
+   */
+  function mobileChatTab() {
+    return rootChatTab(getTab(activeTabId)) || getTab(reportedChatTabId);
+  }
+
+  /**
+   * The phone layout's screen bar (#mobile-screens): the number of
+   * running chats, the title of the chat its screen shows, the Files
+   * button while a content tab is open, and the screen on view.  An
+   * open drawer covers the bar, so only the chat or the file screen is
+   * ever marked current.
+   */
+  function renderMobileScreenBar() {
+    const running = tabs.filter(isLaunchRunning).length;
+    document.getElementById('mobile-running').hidden = running === 0;
+    document.getElementById('mobile-running-count').textContent =
+      String(running);
+    document
+      .getElementById('mobile-screen-chats')
+      .setAttribute(
+        'aria-label',
+        running ? 'Chats, ' + running + ' running' : 'Chats',
+      );
+    const chat = mobileChatTab();
+    document.getElementById('mobile-screen-chat-title').textContent =
+      (chat && tabLabel(chat)) || 'Chat';
+    const active = getTab(activeTabId);
+    const chatBtn = document.getElementById('mobile-screen-chat');
+    const fileBtn = document.getElementById('mobile-screen-file');
+    fileBtn.hidden = !tabs.some(t => t.isContentTab);
+    const current = active && active.isContentTab ? fileBtn : chatBtn;
+    [chatBtn, fileBtn].forEach(btn => {
+      if (btn === current) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
   }
 
   /**
@@ -6640,10 +6685,10 @@
 
   const DRAWERS_VERSION = 3;
   const isMobileRemote = isMobileRemoteWebApp();
-  // A phone or tablet reaches the chats and the task info by swiping
-  // (the phone screens, see onMobileSwipe), so remote-codex.css drops
-  // the composer's two drawer buttons under this class.  A narrow
-  // mouse-only window keeps them: it cannot swipe.
+  // A phone or tablet reaches the chats and the task info through the
+  // screen bar or by swiping (see onMobileSwipe), so remote-codex.css
+  // shows the bar and drops the composer's two drawer buttons under
+  // this class.  A narrow mouse-only window keeps the buttons.
   if (isMobileRemote) document.body.classList.add('remote-mobile');
   // The composer stays reachable by default. On a phone the textbox folds
   // away while a task is running (see syncMobileInputDrawer) to give the
@@ -23169,6 +23214,7 @@
     tab.isRunning = running;
     if (!running) tab.isStopping = false;
     if (tab.id === activeTabId) renderStopButton();
+    renderMobileScreenBar();
   }
 
   function setRunningState(running) {
@@ -25423,7 +25469,7 @@
         return;
       }
       if (!active || !active.isContentTab) return;
-      const chat = rootChatTab(active) || tabs.find(t => !t.isContentTab);
+      const chat = mobileChatTab();
       if (chat) switchToTab(chat.id);
     }
 
@@ -25438,6 +25484,15 @@
       if (next < SCREEN_CHATS || next > SCREEN_INFO) return;
       showMobileScreen(next);
     }
+
+    /** A tap on the screen bar: the screen of the button tapped. */
+    function onMobileScreenBarClick(e) {
+      const btn = e.target.closest('button');
+      if (btn) showMobileScreen(Number(btn.dataset.screen));
+    }
+    document
+      .getElementById('mobile-screens')
+      .addEventListener('click', onMobileScreenBarClick);
 
     /** The sideways scroll offsets of the open Monaco editors: an
      *  editor scrolls through transforms, so mobileSwipe.js cannot tell
@@ -25488,12 +25543,12 @@
     }
     // ---- The swipe hint ----------------------------------------------
     //
-    // A phone has no buttons for the chats and task-info screens (see
-    // body.remote-mobile), and nothing on the page shows that they are
-    // swiped to.  So the first time the page is on the phone layout it
-    // says so in a sticky notice, until the user ticks "Do not show
-    // this again" (kept in this browser's localStorage: the gesture is
-    // this device's, and a desktop never shows the notice).
+    // The screen bar names the phone's screens, but nothing on the page
+    // shows that they can be swiped to as well.  So the first time the
+    // page is on the phone layout it says so in a sticky notice, until
+    // the user ticks "Do not show this again" (kept in this browser's
+    // localStorage: the gesture is this device's, and a desktop never
+    // shows the notice).
     const SWIPE_HINT_KEY = 'kiss-swipe-hint-dismissed';
     let swipeHintShown = false;
 

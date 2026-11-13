@@ -24,6 +24,15 @@
     </div>
   </div>
   <div id="app" style="display:none;">
+    <!-- The phone layout's screen bar (shown by remote-codex.css): one
+         button per phone screen; data-screen is the SCREEN_* number in
+         main.js. -->
+    <nav id="mobile-screens" aria-label="Screens">
+      <button type="button" id="mobile-screen-chats" data-screen="0"><span>Chats</span><span id="mobile-running" hidden><span class="status-spinner" aria-hidden="true"></span><span id="mobile-running-count"></span></span></button>
+      <button type="button" id="mobile-screen-chat" data-screen="1"><span id="mobile-screen-chat-title"></span></button>
+      <button type="button" id="mobile-screen-file" data-screen="2" hidden>Files</button>
+      <button type="button" id="mobile-screen-info" data-screen="3">Info</button>
+    </nav>
     <!-- The chat on screen is the one picked in the Chats panel: there
          is no row of chat tabs.  The GROUP strip (see renderTabBar in
          main.js) holds the chat on screen with the sub-agents it
