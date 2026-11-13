@@ -51,6 +51,7 @@ from kiss.agents.sorcar.persistence import (
     _get_adjacent_task_by_chat_id,
     _history_date_range,
     _is_failed_result,
+    _listed_tasks,
     _load_chat_events_by_task_id,
     _load_history,
     _load_input_texts,
@@ -1380,6 +1381,19 @@ class AgentServer(
             if isinstance(mdl_live, str) and mdl_live:
                 session["model"] = mdl_live
             session["is_parallel"] = state.use_parallel
+
+    def _get_running_chats(self, conn_id: str = "") -> None:
+        """Send the tasks the CHATS panel lists under Running to *conn_id*.
+
+        The ``runningChats`` reply holds one ``{chatId, isCron, cronOnly}``
+        per running task of this daemon that the panel lists (see
+        :func:`_listed_tasks`).  The phone's Chats button counts them.
+        """
+        chats = [
+            {"chatId": chat_id, "isCron": is_cron, "cronOnly": cron_only}
+            for chat_id, is_cron, cron_only in _listed_tasks(self._get_running_task_ids())
+        ]
+        self._broadcast_to_conn({"type": "runningChats", "chats": chats}, conn_id)
 
     def _get_history(
         self,

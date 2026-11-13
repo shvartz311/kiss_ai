@@ -1141,6 +1141,10 @@
   // The view the rows on screen were built for: a view switch is a
   // rebuild even when the data did not change.
   let historyRenderedLegacy = false;
+  // The running tasks the daemon last listed (`runningChats`), one
+  // {chatId, isCron, cronOnly} each: the rows the list puts under
+  // Running.
+  let runningChats = [];
   // A destructive history rebuild is deferred while a press (mouse
   // button or touch contact) is held inside the list: replacing ANY row
   // between press and release would swallow the resulting click (its
@@ -2530,6 +2534,82 @@
     if (members.length > 1) restoreStripFocus(tabList, focused);
 
     renderContentTabBar(split);
+    renderMobileScreenBar();
+  }
+
+  /**
+   * The chat the phone's chat screen shows: the tab on screen, or,
+   * while a file, browser or terminal tab is there, the chat that tab
+   * belongs to, else (a browser page belongs to none) the chat it took
+   * the screen from.
+   *
+   * @returns {object|null} A chat tab, or null when there is none.
+   */
+  function mobileChatTab() {
+    return rootChatTab(getTab(activeTabId)) || getTab(reportedChatTabId);
+  }
+
+  /**
+   * Whether the CHATS list shows a chat's panel: one of its loaded
+   * tasks passes the filters.
+   *
+   * @param {string} chatId The chat's id.
+   * @returns {boolean}
+   */
+  function historyChatShown(chatId) {
+    const group = historyChatGroups.get(chatId);
+    return !!group && group.style.display !== 'none';
+  }
+
+  /**
+   * How many items the CHATS list shows under Running, counted from
+   * the daemon's `runningChats`: the tasks in the flat view, else the
+   * chats.  The Cron chip hides the cron scheduler's tasks, and such a
+   * task still puts its chat under Running when the list shows the
+   * chat for its other tasks.
+   *
+   * @returns {number}
+   */
+  function runningChatCount() {
+    const showCron = document.getElementById('hf-cron').checked;
+    if (historyLegacyView)
+      return runningChats.filter(c => showCron || !c.isCron).length;
+    const shown = runningChats.filter(
+      c => showCron || !c.isCron || historyChatShown(c.chatId),
+    );
+    return new Set(shown.map(c => c.chatId)).size;
+  }
+
+  /**
+   * The phone layout's screen bar (#mobile-screens): the number of
+   * running chats, the title of the chat its screen shows, the Files
+   * button while a content tab is open, and the screen on view.  An
+   * open drawer covers the bar, so only the chat or the file screen is
+   * ever marked current.
+   */
+  function renderMobileScreenBar() {
+    const running = runningChatCount();
+    document.getElementById('mobile-running').hidden = running === 0;
+    document.getElementById('mobile-running-count').textContent =
+      String(running);
+    document
+      .getElementById('mobile-screen-chats')
+      .setAttribute(
+        'aria-label',
+        running ? 'Chats, ' + running + ' running' : 'Chats',
+      );
+    const chat = mobileChatTab();
+    document.getElementById('mobile-screen-chat-title').textContent =
+      (chat && tabLabel(chat)) || 'Chat';
+    const active = getTab(activeTabId);
+    const chatBtn = document.getElementById('mobile-screen-chat');
+    const fileBtn = document.getElementById('mobile-screen-file');
+    fileBtn.hidden = !tabs.some(t => t.isContentTab);
+    const current = active && active.isContentTab ? fileBtn : chatBtn;
+    [chatBtn, fileBtn].forEach(btn => {
+      if (btn === current) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
   }
 
   /**
@@ -6640,10 +6720,10 @@
 
   const DRAWERS_VERSION = 3;
   const isMobileRemote = isMobileRemoteWebApp();
-  // A phone or tablet reaches the chats and the task info by swiping
-  // (the phone screens, see onMobileSwipe), so remote-codex.css drops
-  // the composer's two drawer buttons under this class.  A narrow
-  // mouse-only window keeps them: it cannot swipe.
+  // A phone or tablet reaches the chats and the task info through the
+  // screen bar or by swiping (see onMobileSwipe), so remote-codex.css
+  // shows the bar and drops the composer's two drawer buttons under
+  // this class.  A narrow mouse-only window keeps the buttons.
   if (isMobileRemote) document.body.classList.add('remote-mobile');
   // The composer stays reachable by default. On a phone the textbox folds
   // away while a task is running (see syncMobileInputDrawer) to give the
@@ -20525,19 +20605,22 @@
   // lands (see the `history` handler), so a late change is still
   // picked up and every reply sent is shown.
   function refreshHistory() {
-    if (sidebar.classList.contains('open')) {
-      if (historyPageOneInFlight()) {
-        historyRefreshWanted = true;
-      } else {
-        requestHistoryFromStart();
-      }
-    }
+    if (sidebar.classList.contains('open')) refetchHistoryPageOne();
+    // The phone's Chats button counts the running chats with the list
+    // closed too (renderMobileScreenBar).
+    if (isMobileRemote) api.getRunningChats();
     // Task news (a run started or finished, a commit landed) may have
     // changed the workspace: re-list the Explorer folders on screen /
     // re-read git for the Source Control view.  A hidden view — or one
     // behind a closed phone drawer — is only marked dirty and reloads
     // when it next shows.
     refreshSidebarDataViews(true);
+  }
+
+  /** Ask for page one, or fold the ask into the page one in flight. */
+  function refetchHistoryPageOne() {
+    if (historyPageOneInFlight()) historyRefreshWanted = true;
+    else requestHistoryFromStart();
   }
 
   /** Page one landed: send the refresh folded into it, if any. */
@@ -22356,6 +22439,20 @@
       case 'tasks_updated':
         refreshHistory();
         requestInputHistory();
+        break;
+      case 'runningChats':
+        runningChats = ev.chats;
+        // A cron task running in a chat with other tasks counts when
+        // the list shows that chat (runningChatCount): a closed list
+        // that lacks the chat is brought up to date.
+        if (
+          !sidebar.classList.contains('open') &&
+          runningChats.some(
+            c => c.isCron && !c.cronOnly && !historyChatShown(c.chatId),
+          )
+        )
+          refetchHistoryPageOne();
+        renderMobileScreenBar();
         break;
 
       case 'openExternalResult':
@@ -25423,7 +25520,7 @@
         return;
       }
       if (!active || !active.isContentTab) return;
-      const chat = rootChatTab(active) || tabs.find(t => !t.isContentTab);
+      const chat = mobileChatTab();
       if (chat) switchToTab(chat.id);
     }
 
@@ -25438,6 +25535,15 @@
       if (next < SCREEN_CHATS || next > SCREEN_INFO) return;
       showMobileScreen(next);
     }
+
+    /** A tap on the screen bar: the screen of the button tapped. */
+    function onMobileScreenBarClick(e) {
+      const btn = e.target.closest('button');
+      if (btn) showMobileScreen(Number(btn.dataset.screen));
+    }
+    document
+      .getElementById('mobile-screens')
+      .addEventListener('click', onMobileScreenBarClick);
 
     /** The sideways scroll offsets of the open Monaco editors: an
      *  editor scrolls through transforms, so mobileSwipe.js cannot tell
@@ -25488,12 +25594,12 @@
     }
     // ---- The swipe hint ----------------------------------------------
     //
-    // A phone has no buttons for the chats and task-info screens (see
-    // body.remote-mobile), and nothing on the page shows that they are
-    // swiped to.  So the first time the page is on the phone layout it
-    // says so in a sticky notice, until the user ticks "Do not show
-    // this again" (kept in this browser's localStorage: the gesture is
-    // this device's, and a desktop never shows the notice).
+    // The screen bar names the phone's screens, but nothing on the page
+    // shows that they can be swiped to as well.  So the first time the
+    // page is on the phone layout it says so in a sticky notice, until
+    // the user ticks "Do not show this again" (kept in this browser's
+    // localStorage: the gesture is this device's, and a desktop never
+    // shows the notice).
     const SWIPE_HINT_KEY = 'kiss-swipe-hint-dismissed';
     let swipeHintShown = false;
 
@@ -29702,6 +29808,8 @@
     // painted: a filter changes no row's task, and the paths that do
     // (a rebuild, a new active task) paint it themselves.
     if (historyActiveScrollPending) applyHistoryActiveTask();
+    // The Chats button counts what the list shows under Running.
+    renderMobileScreenBar();
   }
 
   /**
