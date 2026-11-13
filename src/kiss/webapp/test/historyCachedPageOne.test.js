@@ -17,6 +17,13 @@
 // reply replaces or keeps it), a relabel while page one is in flight
 // leaves the flight alone (its reply renders with the labels), and
 // page one of the plain view is written back for the next load.
+//
+// A phone-width page, whose drawer starts closed, asked for page one
+// only when the drawer first opened, behind the transcript the `ready`
+// fan-out had queued by then, and its list read "No conversations yet"
+// until that reply landed.  Now it asks at load like the desktop, the
+// placeholder says the list is loading, and opening the drawer keeps a
+// page one in flight.
 
 const assert = require('assert');
 const {makePage, send, fakeMatchMedia, ofType} = require('./simplify2_harness');
@@ -139,11 +146,10 @@ function testNothingIsPaintedWithoutACacheOrOverAFilteredView() {
 }
 
 function testACacheIsNotPaintedOverRowsOrIntoAFilteredView() {
-  // The sidebar opens from the burger on a phone-width page: rows
-  // already on screen (the search's) are left alone.
+  // A page without matchMedia paints nothing at load: its sidebar
+  // opens from the burger, into the search's view, which is left alone.
   const {win, posted} = makePage({
     beforeScripts: win => {
-      fakeMatchMedia(win, false);
       win.localStorage.setItem(
         CACHE_KEY,
         JSON.stringify({sessions: CACHED, machineLabels: {}}),
@@ -196,7 +202,11 @@ function testARelabelDuringTheFlightDoesNotDiscardTheReply() {
       {name: 'box', label: 'Box again', status: 'reachable'},
     ],
   });
-  assert.strictEqual(ofType(posted, 'getHistory').length, 1, 'still one request');
+  assert.strictEqual(
+    ofType(posted, 'getHistory').length,
+    1,
+    'still one request',
+  );
   send(win, reply(folded[0].generation, FRESH));
   assert.deepStrictEqual(chips(win), ['Box again']);
   // Once nothing is in flight, a relabel refetches as before.
@@ -215,9 +225,71 @@ function testARelabelDuringTheFlightDoesNotDiscardTheReply() {
   console.log('  ok - a relabel during the flight does not discard the reply');
 }
 
+function listText(win) {
+  return win.document.getElementById('history-list').textContent.trim();
+}
+
+function testAPhonePageAsksForPageOneAtLoad() {
+  const {win, posted} = makePage({
+    beforeScripts: win => fakeMatchMedia(win, false),
+  });
+  const drawer = win.document.getElementById('sidebar');
+  assert.ok(!drawer.classList.contains('open'), 'the drawer starts closed');
+  // Nothing has answered yet: the list says so, not that it is empty.
+  assert.strictEqual(listText(win), 'Loading chats...');
+  const boot = ofType(posted, 'getHistory');
+  assert.strictEqual(boot.length, 1, 'page one is asked for at load');
+  assert.strictEqual(boot[0].offset, 0);
+  // The drawer opens while that page one is in flight: no second
+  // request (a new generation would throw the reply away).
+  win.document.getElementById('menu-btn').click();
+  assert.ok(drawer.classList.contains('open'));
+  assert.strictEqual(
+    ofType(posted, 'getHistory').length,
+    1,
+    'the flight is kept',
+  );
+  send(win, reply(boot[0].generation, FRESH));
+  assert.deepStrictEqual(rowTitles(win), ['new box task', 'new local']);
+  // The opening was folded into the flight: one refresh follows the
+  // reply, so a change between the request and the opening shows.
+  const after = ofType(posted, 'getHistory');
+  assert.strictEqual(after.length, 2, 'one refresh after the reply');
+  send(win, reply(after[1].generation, CACHED));
+  assert.deepStrictEqual(rowTitles(win), ['old box task', 'old local']);
+  assert.strictEqual(ofType(posted, 'getHistory').length, 2, 'and no more');
+  win.close();
+  console.log('  ok - a phone page asks for page one at load');
+}
+
+function testAClosedDrawerIsFilledAndAnEmptyReplySaysSo() {
+  const {win, posted} = makePage({
+    beforeScripts: win => fakeMatchMedia(win, false),
+  });
+  // The reply lands before the drawer was ever opened: the rows are
+  // there (and kept for the next load), and nothing is refetched.
+  send(win, reply(lastGetHistory(posted).generation, FRESH));
+  assert.deepStrictEqual(rowTitles(win), ['new box task', 'new local']);
+  assert.strictEqual(
+    JSON.parse(win.localStorage.getItem(CACHE_KEY)).sessions.length,
+    2,
+  );
+  assert.strictEqual(ofType(posted, 'getHistory').length, 1, 'no refetch');
+  // Opening the drawer with nothing in flight asks afresh, as before;
+  // a reply without rows is what reads "No conversations yet".
+  win.document.getElementById('menu-btn').click();
+  assert.strictEqual(ofType(posted, 'getHistory').length, 2);
+  send(win, reply(lastGetHistory(posted).generation, []));
+  assert.strictEqual(listText(win), 'No conversations yet');
+  win.close();
+  console.log('  ok - a closed drawer is filled; an empty reply says so');
+}
+
 testCachedRowsPaintBeforeTheFirstReply();
 testAReplyEqualToTheCacheKeepsTheRows();
 testNothingIsPaintedWithoutACacheOrOverAFilteredView();
 testACacheIsNotPaintedOverRowsOrIntoAFilteredView();
 testARelabelDuringTheFlightDoesNotDiscardTheReply();
+testAPhonePageAsksForPageOneAtLoad();
+testAClosedDrawerIsFilledAndAnEmptyReplySaysSo();
 console.log('historyCachedPageOne: all tests passed');

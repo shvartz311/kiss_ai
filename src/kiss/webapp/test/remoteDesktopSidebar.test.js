@@ -66,10 +66,12 @@ function testMobileKeepsDrawerClosed() {
     !sidebar.classList.contains('open'),
     'sidebar must stay closed on narrow remote page load',
   );
-  assert.strictEqual(
-    getHistoryMsgs(posted).length,
-    0,
-    'no auto getHistory on narrow load',
+  // The closed drawer's rows are asked for at load all the same (see
+  // historyCachedPageOne.test.js): one page one, as on the desktop.
+  assert.deepStrictEqual(
+    getHistoryMsgs(posted).map(m => m.offset),
+    [0],
+    'one page-one getHistory on narrow load',
   );
   win.close();
   console.log('PASS narrow remote page keeps the drawer closed');

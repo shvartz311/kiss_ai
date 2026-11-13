@@ -511,6 +511,7 @@ class _CommandsMixin:
             machine: str = "",
             work_dir: str = "",
         ) -> None: ...
+        def _get_running_chats(self, conn_id: str = "") -> None: ...
         def _get_files(
             self,
             prefix: str,
@@ -1366,6 +1367,10 @@ class _CommandsMixin:
             machine if isinstance(machine, str) else "",
             work_dir if isinstance(work_dir, str) else "",
         )
+
+    def _cmd_get_running_chats(self, cmd: dict[str, Any]) -> None:
+        """Send the running chats to the requesting connection only."""
+        self._get_running_chats(cmd.get("connId", ""))
 
     def _cmd_get_task_usage(self, cmd: dict[str, Any]) -> None:
         """Send the totals of the listed tasks to the requesting connection only.
@@ -3465,6 +3470,7 @@ class _CommandsMixin:
         "getModels": _cmd_get_models,
         "selectModel": _cmd_select_model,
         "getHistory": _cmd_get_history,
+        "getRunningChats": _cmd_get_running_chats,
         "getTaskUsage": _cmd_get_task_usage,
         "setFavorite": _cmd_set_favorite,
         "setChatSummary": _cmd_set_chat_summary,

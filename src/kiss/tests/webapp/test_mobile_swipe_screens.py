@@ -249,6 +249,30 @@ def test_without_a_file_the_swipes_step_chats_chat_info(browser, harness):
         context.close()
 
 
+def test_the_chats_screen_has_its_rows_the_first_time_it_shows(browser, harness):
+    """A phone asks for the chats at load, like the desktop: the drawer
+    is filled before it is first swiped to, by that one request."""
+    task_id, _ = persistence._add_task("phone drawer row", "phone-drawer-chat")
+    persistence._save_task_result("done", task_id=task_id)
+    context, page, sent = _open_page_mobile(browser, harness)
+    try:
+        _dismiss_toasts(page)
+        cdp = _touch_session(page)
+        assert _screen(page) == "chat"
+        # The chat's header: its one task sits folded under it.
+        row = page.locator("#history-list .history-chat-header").filter(
+            has_text="phone drawer row",
+        )
+        row.wait_for(state="attached", timeout=15000)
+        asked = [f for f in sent if f.get("type") == "getHistory"]
+        assert [f["offset"] for f in asked] == [0]
+        _swipe_right(cdp)
+        _wait_screen(page, "chats")
+        row.wait_for(state="visible", timeout=15000)
+    finally:
+        context.close()
+
+
 def test_an_open_file_is_the_third_screen(browser, harness):
     context, page, cdp = _open_mobile(browser, harness)
     try:

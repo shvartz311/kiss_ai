@@ -233,6 +233,7 @@ API: dict[str, ApiCommand] = {c.name: c for c in (
     ApiCommand("resumeSession", handler="resume_session"),
     ApiCommand("ready", handler="ready"),
     ApiCommand("getHistory", handler="get_history"),
+    ApiCommand("getRunningChats"),
     ApiCommand("getTaskUsage", required=("taskIds",)),
     ApiCommand("getAdjacentTask", required=("direction",)),
     ApiCommand("setFavorite", required=("taskId", "isFavorite")),
