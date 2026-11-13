@@ -122,19 +122,22 @@ def test_phone_bar_counts_the_running_chats(browser, harness):
 
 def test_phone_bar_returns_from_a_browser_page_to_the_chat_left(browser, harness):
     context, page, sent = _open_phone_page(browser, harness, PHONE_UA)
+    broadcast = harness.server._printer.broadcast
+    busy = ""
     try:
         page.click(TOAST + " .kiss-notification-close")
-        broadcast = harness.server._printer.broadcast
 
         def new_chat_beside_a_busy_one() -> str:
             """Mark the chat on screen as running and press "+", which
             leaves a busy chat open; returns the busy chat's tab id."""
-            busy = [f["tabId"] for f in sent if f.get("type") in ("ready", "openTab")][-1]
-            broadcast({"type": "status", "running": True, "tabId": busy})
+            tab_id: str = [
+                f["tabId"] for f in sent if f.get("type") in ("ready", "openTab")
+            ][-1]
+            broadcast({"type": "status", "running": True, "tabId": tab_id})
             page.wait_for_selector("#stop-btn", state="visible", timeout=10000)
             page.click("#new-chat-btn")
             page.wait_for_selector("#stop-btn", state="hidden", timeout=10000)
-            return busy
+            return tab_id
 
         # The page's first tab is a placeholder the daemon never listed,
         # so the daemon's tab list drops it once it lists the second.
